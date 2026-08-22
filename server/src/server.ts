@@ -155,10 +155,26 @@ app.get(['/api/health', '/health'], (req, res) => {
 
 // ---------------- REST API ----------------
 
-// Get list of all boards for Dashboard (Admin only)
-app.get('/api/boards', requireAdmin, (req, res) => {
+// Get list of all boards for Dashboard (Admin only, handles healthchecks)
+app.get('/api/boards', (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+  const isHealthCheck =
+    userAgent.includes('health') ||
+    userAgent.includes('railway') ||
+    userAgent.includes('render') ||
+    Boolean(req.headers['x-railway-healthcheck']);
+
+  if (isHealthCheck) {
+    return res.status(200).json({ status: 'healthy' });
+  }
+
+  if (!token || !adminTokens.has(token)) {
+    return res.status(401).json({ error: 'Unauthorized: Admin login required' });
+  }
+
   const summaries = getAllBoardSummaries();
-  // Attach active viewer count
   const withActiveUsers = summaries.map((b) => ({
     ...b,
     activeUsersCount: getRoomUsers(b.id).length,
