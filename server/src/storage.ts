@@ -5,7 +5,7 @@ import { Board, CommentPin, CommentReply } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, '../data');
+const DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../data');
 const BOARDS_DIR = path.join(DATA_DIR, 'boards');
 
 if (!fs.existsSync(DATA_DIR)) {
