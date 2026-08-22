@@ -433,12 +433,55 @@ io.on('connection', (socket: Socket) => {
   });
 });
 
-// Serve frontend in production (e.g. on Render)
+// Serve frontend with dynamic OpenGraph & Twitter Card metadata for WhatsApp, Zalo, Facebook crawlers
 const CLIENT_DIST = path.resolve(__dirname, '../../client/dist');
+const INDEX_HTML_PATH = path.join(CLIENT_DIST, 'index.html');
+
 if (fs.existsSync(CLIENT_DIST)) {
+  // Serve static assets (images, js, css)
   app.use(express.static(CLIENT_DIST));
+
+  // Dynamic OpenGraph injection for root and board pages
   app.get('*', (req, res) => {
-    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+    try {
+      let html = fs.readFileSync(INDEX_HTML_PATH, 'utf-8');
+
+      // Detect board slug from URL path (e.g. /board/HiltonHotel or /HiltonHotel)
+      const pathParts = req.path.split('/').filter(Boolean);
+      const slug = pathParts[0] === 'board' ? pathParts[1] : pathParts[0];
+
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+      const origin = `${protocol}://${host}`;
+      const absoluteOgImage = `${origin}/og-image.jpg`;
+
+      let title = 'Collaborative Client Whiteboard — Live Canvas & Feedback';
+      let description = 'Real-time collaborative whiteboard for teams and clients. Draw shapes, write text, copy-paste images, and leave pinpoint feedback comments without logging in.';
+
+      if (slug && slug !== 'index.html' && !slug.includes('.')) {
+        const board = getBoard(slug.toLowerCase());
+        const boardName = board?.name || slug;
+        title = `${boardName} — Collaborative Whiteboard`;
+        description = `Join the ${boardName} whiteboard to review designs, collaborate in real-time, and leave pinpoint feedback comments.`;
+      }
+
+      // Inject dynamic title, description, and absolute image URLs
+      html = html
+        .replace(/<title>.*?<\/title>/gi, `<title>${title}</title>`)
+        .replace(/content="[^"]*og-image\.jpg"/gi, `content="${absoluteOgImage}"`)
+        .replace(/property="og:title" content="[^"]*"/gi, `property="og:title" content="${title}"`)
+        .replace(/property="og:description" content="[^"]*"/gi, `property="og:description" content="${description}"`)
+        .replace(/property="og:url" content="[^"]*"/gi, `property="og:url" content="${origin}${req.path}"`)
+        .replace(/name="twitter:title" content="[^"]*"/gi, `name="twitter:title" content="${title}"`)
+        .replace(/name="twitter:description" content="[^"]*"/gi, `name="twitter:description" content="${description}"`)
+        .replace(/name="twitter:image" content="[^"]*"/gi, `name="twitter:image" content="${absoluteOgImage}"`);
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    } catch (err) {
+      console.error('Error serving index.html:', err);
+      res.sendFile(INDEX_HTML_PATH);
+    }
   });
 }
 
