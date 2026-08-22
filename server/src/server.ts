@@ -480,8 +480,8 @@ const CLIENT_DIST = path.resolve(__dirname, '../../client/dist');
 const INDEX_HTML_PATH = path.join(CLIENT_DIST, 'index.html');
 
 if (fs.existsSync(CLIENT_DIST)) {
-  // Serve static assets (images, js, css)
-  app.use(express.static(CLIENT_DIST));
+  // Serve static assets (images, js, css) without intercepting root index.html
+  app.use(express.static(CLIENT_DIST, { index: false }));
 
   // Dynamic OpenGraph injection for root and board pages
   app.get('*', (req, res) => {
