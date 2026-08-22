@@ -1,0 +1,27 @@
+{
+  "id": "hiltonhotel",
+  "name": "HiltonHotel",
+  "createdAt": "2026-08-22T10:50:40.533Z",
+  "updatedAt": "2026-08-22T10:56:46.396Z",
+  "passcode": null,
+  "elements": [],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "theme": "light"
+  },
+  "files": {},
+  "comments": [
+    {
+      "id": "comment-1787395962786-jnzvq",
+      "boardId": "hiltonhotel",
+      "x": 1012,
+      "y": 242.33331298828125,
+      "author": "HiltonTeam2",
+      "authorColor": "#8b5cf6",
+      "text": "Thats call give me it",
+      "createdAt": "2026-08-22T10:52:42.786Z",
+      "resolved": false,
+      "replies": []
+    }
+  ]
+}
