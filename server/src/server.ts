@@ -106,10 +106,52 @@ function generateAutoGuestName(board: any, existingUsers: CollaboratorUser[]): {
   return { name: finalName, color };
 }
 
+// ---------------- ADMIN AUTHENTICATION ----------------
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const adminTokens = new Set<string>();
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  if (!token || !adminTokens.has(token)) {
+    return res.status(401).json({ error: 'Unauthorized: Admin login required' });
+  }
+  next();
+}
+
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  if (!password || password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Invalid admin password' });
+  }
+
+  const token = `adm_${uuidv4().replace(/-/g, '')}`;
+  adminTokens.add(token);
+  res.json({ success: true, token });
+});
+
+app.get('/api/admin/verify', (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  if (token && adminTokens.has(token)) {
+    return res.json({ authenticated: true });
+  }
+  res.status(401).json({ authenticated: false });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  if (token) {
+    adminTokens.delete(token);
+  }
+  res.json({ success: true });
+});
+
 // ---------------- REST API ----------------
 
-// Get list of all boards for Dashboard
-app.get('/api/boards', (req, res) => {
+// Get list of all boards for Dashboard (Admin only)
+app.get('/api/boards', requireAdmin, (req, res) => {
   const summaries = getAllBoardSummaries();
   // Attach active viewer count
   const withActiveUsers = summaries.map((b) => ({
@@ -119,8 +161,8 @@ app.get('/api/boards', (req, res) => {
   res.json(withActiveUsers);
 });
 
-// Create new board
-app.post('/api/boards', (req, res) => {
+// Create new board (Admin only)
+app.post('/api/boards', requireAdmin, (req, res) => {
   const { id: rawId, name, passcode, teamPrefix } = req.body;
   let id = rawId ? rawId.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-') : '';
   if (!id) {
@@ -201,9 +243,9 @@ app.patch('/api/boards/:id', (req, res) => {
   res.json(updated);
 });
 
-// Delete board
-app.delete('/api/boards/:id', (req, res) => {
-  const { id } = req.params;
+// Delete board (Admin only)
+app.delete('/api/boards/:id', requireAdmin, (req, res) => {
+  const id = String(req.params.id);
   const deleted = deleteBoard(id);
   if (deleted) {
     io.to(`room:${id}`).emit('board_deleted', { id });
