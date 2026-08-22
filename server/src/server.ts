@@ -289,18 +289,20 @@ io.on('connection', (socket: Socket) => {
 
   // Sync canvas elements & files
   socket.on('sync_elements', (data: {
+    roomId?: string;
     elements: any[];
     appState?: Record<string, any>;
     files?: Record<string, any>;
   }) => {
-    if (!currentRoomId || !currentUser) return;
-    if (currentUser.role === 'commenter') return; // Commenters cannot modify canvas drawings
+    const targetRoom = data.roomId || currentRoomId;
+    if (!targetRoom) return;
+    if (currentUser && currentUser.role === 'commenter') return; // Commenters cannot modify canvas drawings
 
     // Persist changes
-    updateBoardElements(currentRoomId, data.elements, data.appState, data.files);
+    updateBoardElements(targetRoom, data.elements, data.appState, data.files);
 
     // Broadcast instantly to all other clients in this room
-    socket.to(`room:${currentRoomId}`).emit('elements_synced', {
+    socket.to(`room:${targetRoom}`).emit('elements_synced', {
       elements: data.elements,
       files: data.files,
       senderSocketId: socket.id,

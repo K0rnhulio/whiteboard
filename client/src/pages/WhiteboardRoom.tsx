@@ -126,6 +126,7 @@ export const WhiteboardRoom: React.FC = () => {
         setBoardData(board);
         setComments(board.comments || []);
         pendingInitialDataRef.current = board;
+        isInitialDataLoadedRef.current = true;
 
         // If API is already ready, load scene immediately
         const api = excalidrawAPIRef.current;
@@ -141,7 +142,6 @@ export const WhiteboardRoom: React.FC = () => {
               api.addFiles(Object.values(board.files));
             }
             lastSyncElementsRef.current = JSON.stringify(board.elements || []);
-            isInitialDataLoadedRef.current = true;
           } catch (err) {
             console.warn('FetchBoard scene load error:', err);
           } finally {
@@ -158,7 +158,7 @@ export const WhiteboardRoom: React.FC = () => {
         }
       } catch (err) {
         console.error('Failed to load board', err);
-        // Even on direct join of new board, connect
+        isInitialDataLoadedRef.current = true;
         joinRoom(userName, userColor, userRoleRef.current);
       }
     }
@@ -192,6 +192,8 @@ export const WhiteboardRoom: React.FC = () => {
   useEffect(() => {
     socket.on('connect', () => {
       setCurrentSocketId(socket.id || '');
+      // Ensure user joins room on connection / reconnection
+      joinRoom(userName, userColor, userRoleRef.current);
     });
 
     socket.on('room_joined', (data: { board: BoardData; users: CollaboratorUser[]; currentUser: CollaboratorUser }) => {
@@ -205,6 +207,7 @@ export const WhiteboardRoom: React.FC = () => {
       }
 
       pendingInitialDataRef.current = data.board;
+      isInitialDataLoadedRef.current = true;
 
       // Load initial elements onto Excalidraw
       const api = excalidrawAPIRef.current;
@@ -220,7 +223,6 @@ export const WhiteboardRoom: React.FC = () => {
             api.addFiles(Object.values(data.board.files));
           }
           lastSyncElementsRef.current = JSON.stringify(data.board.elements || []);
-          isInitialDataLoadedRef.current = true;
         } catch (err) {
           console.warn('Initial scene load error:', err);
         } finally {
@@ -403,6 +405,7 @@ export const WhiteboardRoom: React.FC = () => {
       syncTimeoutRef.current = setTimeout(() => {
         lastSyncElementsRef.current = serialized;
         socket.emit('sync_elements', {
+          roomId: boardId,
           elements: Array.from(elements),
           appState: {
             viewBackgroundColor: appState.viewBackgroundColor,
@@ -412,7 +415,7 @@ export const WhiteboardRoom: React.FC = () => {
         });
       }, 100); // 100ms debounce for high snappiness
     },
-    [socket]
+    [socket, boardId]
   );
 
   // Multiplayer cursor pointer handler (throttled to ~30fps for ultra-smooth rendering with low network overhead)
@@ -513,6 +516,27 @@ export const WhiteboardRoom: React.FC = () => {
     [userRole]
   );
 
+  const initialData = useMemo(() => {
+    if (!boardData) return undefined;
+    return {
+      elements: boardData.elements || [],
+      appState: {
+        viewBackgroundColor: boardData.appState?.viewBackgroundColor || '#ffffff',
+        ...boardData.appState,
+      },
+      files: boardData.files || {},
+    };
+  }, [boardData?.id]);
+
+  if (!boardData) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600 gap-3">
+        <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <span className="text-sm font-semibold">Loading Whiteboard...</span>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-900 overflow-hidden select-none">
       {/* Top Application Bar */}
@@ -528,7 +552,7 @@ export const WhiteboardRoom: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <h2 className="font-extrabold text-sm sm:text-base text-slate-900 truncate max-w-[200px] sm:max-w-xs">
-              {boardData?.name || boardId}
+              {boardData.name || boardId}
             </h2>
 
             {boardData?.hasPasscode && (
@@ -654,6 +678,7 @@ export const WhiteboardRoom: React.FC = () => {
 
         {/* Excalidraw Component */}
         <Excalidraw
+          initialData={initialData}
           excalidrawAPI={handleSetExcalidrawAPI}
           onChange={handleExcalidrawChange}
           onPointerUpdate={handlePointerUpdate}

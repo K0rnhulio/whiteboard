@@ -64,10 +64,9 @@ function saveToDisk(boardId: string) {
   if (!board) return;
 
   const filePath = path.join(BOARDS_DIR, `${boardId}.json`);
-  const tempPath = `${filePath}.tmp`;
   try {
-    fs.writeFileSync(tempPath, JSON.stringify(board, null, 2), 'utf-8');
-    fs.renameSync(tempPath, filePath);
+    fs.writeFileSync(filePath, JSON.stringify(board, null, 2), 'utf-8');
+    console.log(`[Storage] Saved board "${boardId}" (${board.elements?.length || 0} elements) to disk.`);
   } catch (err) {
     console.error(`Failed to save board ${boardId} to disk:`, err);
   }
