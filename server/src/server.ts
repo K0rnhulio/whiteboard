@@ -571,6 +571,7 @@ if (fs.existsSync(CLIENT_DIST)) {
   });
 }
 
-server.listen(PORT, () => {
-  console.log(`Whiteboard Server listening on port ${PORT}`);
+const portNumber = Number(PORT) || 4000;
+server.listen(portNumber, '0.0.0.0', () => {
+  console.log(`Whiteboard Server listening on 0.0.0.0:${portNumber}`);
 });
