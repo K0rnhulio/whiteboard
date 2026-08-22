@@ -1,74 +1,76 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { Board, CommentPin, CommentReply } from './types.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../data');
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.resolve(__dirname, '../data');
+
 const BOARDS_DIR = path.join(DATA_DIR, 'boards');
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+// Ensure data directory exists
 if (!fs.existsSync(BOARDS_DIR)) {
   fs.mkdirSync(BOARDS_DIR, { recursive: true });
 }
 
-// In-memory cache for ultra-fast access
+// In-memory cache for fast sync and low-latency socket emits
 const boardsCache = new Map<string, Board>();
-const saveTimeouts = new Map<string, NodeJS.Timeout>();
 
-// Load all boards on server startup
-function loadAllFromDisk() {
+// Initial load from disk
+export function loadAllFromDisk() {
   try {
+    if (!fs.existsSync(BOARDS_DIR)) return;
     const files = fs.readdirSync(BOARDS_DIR);
+    let count = 0;
     for (const file of files) {
       if (file.endsWith('.json')) {
-        const filePath = path.join(BOARDS_DIR, file);
         try {
+          const filePath = path.join(BOARDS_DIR, file);
           const content = fs.readFileSync(filePath, 'utf-8');
           const board: Board = JSON.parse(content);
           if (board && board.id) {
-            boardsCache.set(board.id, board);
+            boardsCache.set(board.id.toLowerCase(), board);
+            count++;
           }
         } catch (err) {
           console.error(`Failed to parse board file ${file}:`, err);
         }
       }
     }
-    console.log(`Loaded ${boardsCache.size} boards from disk.`);
+    console.log(`Loaded ${count} boards from disk.`);
   } catch (err) {
-    console.error('Error reading boards directory:', err);
+    console.error('Error loading boards from disk:', err);
   }
 }
 
-loadAllFromDisk();
+// Debounce timer for disk saves to prevent excessive I/O during heavy multi-user drawing
+const saveTimeouts = new Map<string, NodeJS.Timeout>();
 
-// Debounced save to disk (prevents disk thrashing during rapid drawing)
 function scheduleSave(boardId: string) {
-  if (saveTimeouts.has(boardId)) {
-    clearTimeout(saveTimeouts.get(boardId)!);
+  const normalizedId = boardId.toLowerCase();
+  if (saveTimeouts.has(normalizedId)) {
+    clearTimeout(saveTimeouts.get(normalizedId)!);
   }
 
   const timeout = setTimeout(() => {
-    saveToDisk(boardId);
-    saveTimeouts.delete(boardId);
+    saveToDisk(normalizedId);
+    saveTimeouts.delete(normalizedId);
   }, 1000); // 1-second debounce
 
-  saveTimeouts.set(boardId, timeout);
+  saveTimeouts.set(normalizedId, timeout);
 }
 
 function saveToDisk(boardId: string) {
-  const board = boardsCache.get(boardId);
+  const normalizedId = boardId.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board) return;
 
-  const filePath = path.join(BOARDS_DIR, `${boardId}.json`);
+  const filePath = path.join(BOARDS_DIR, `${normalizedId}.json`);
   try {
     fs.writeFileSync(filePath, JSON.stringify(board, null, 2), 'utf-8');
-    console.log(`[Storage] Saved board "${boardId}" (${board.elements?.length || 0} elements) to disk.`);
+    console.log(`[Storage] Saved board "${normalizedId}" (${board.elements?.length || 0} elements, ${board.comments?.length || 0} comments) to disk.`);
   } catch (err) {
-    console.error(`Failed to save board ${boardId} to disk:`, err);
+    console.error(`Failed to save board ${normalizedId} to disk:`, err);
   }
 }
 
@@ -84,25 +86,26 @@ export function getAllBoardSummaries() {
       hasPasscode: Boolean(board.passcode && board.passcode.trim().length > 0),
       elementCount: board.elements?.length || 0,
       commentCount: board.comments?.length || 0,
-      openCommentCount: board.comments?.filter((c) => !c.resolved)?.length || 0,
+      openCommentCount: board.comments?.filter((c: CommentPin) => !c.resolved)?.length || 0,
     });
   }
   return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
 export function getBoard(id: string): Board | null {
-  return boardsCache.get(id) || null;
+  return boardsCache.get(id.toLowerCase()) || null;
 }
 
 export function getOrCreateBoard(id: string, name?: string, passcode?: string | null, teamPrefix?: string): Board {
-  const existing = boardsCache.get(id);
+  const normalizedId = id.toLowerCase();
+  const existing = boardsCache.get(normalizedId);
   if (existing) {
     return existing;
   }
 
   const now = new Date().toISOString();
   const newBoard: Board = {
-    id,
+    id: normalizedId,
     name: name || id,
     teamPrefix: teamPrefix || undefined,
     createdAt: now,
@@ -117,8 +120,8 @@ export function getOrCreateBoard(id: string, name?: string, passcode?: string | 
     comments: [],
   };
 
-  boardsCache.set(id, newBoard);
-  saveToDisk(id);
+  boardsCache.set(normalizedId, newBoard);
+  saveToDisk(normalizedId);
   return newBoard;
 }
 
@@ -126,7 +129,8 @@ export function updateBoardMetadata(
   id: string,
   data: { name?: string; passcode?: string | null; teamPrefix?: string }
 ): Board | null {
-  const board = boardsCache.get(id);
+  const normalizedId = id.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board) return null;
 
   if (data.name !== undefined) board.name = data.name;
@@ -134,8 +138,8 @@ export function updateBoardMetadata(
   if (data.teamPrefix !== undefined) board.teamPrefix = data.teamPrefix;
   board.updatedAt = new Date().toISOString();
 
-  boardsCache.set(id, board);
-  scheduleSave(id);
+  boardsCache.set(normalizedId, board);
+  scheduleSave(normalizedId);
   return board;
 }
 
@@ -145,7 +149,8 @@ export function updateBoardElements(
   appState?: Record<string, any>,
   files?: Record<string, any>
 ): Board | null {
-  const board = boardsCache.get(id);
+  const normalizedId = id.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board) return null;
 
   board.elements = elements;
@@ -164,27 +169,29 @@ export function updateBoardElements(
   }
   board.updatedAt = new Date().toISOString();
 
-  boardsCache.set(id, board);
-  scheduleSave(id);
+  boardsCache.set(normalizedId, board);
+  scheduleSave(normalizedId);
   return board;
 }
 
 export function deleteBoard(id: string): boolean {
-  boardsCache.delete(id);
-  const filePath = path.join(BOARDS_DIR, `${id}.json`);
+  const normalizedId = id.toLowerCase();
+  boardsCache.delete(normalizedId);
+  const filePath = path.join(BOARDS_DIR, `${normalizedId}.json`);
   if (fs.existsSync(filePath)) {
     try {
       fs.unlinkSync(filePath);
       return true;
     } catch (err) {
-      console.error(`Failed to delete board file for ${id}:`, err);
+      console.error(`Failed to delete board file for ${normalizedId}:`, err);
     }
   }
   return true;
 }
 
 export function verifyBoardPasscode(id: string, passcode?: string | null): boolean {
-  const board = boardsCache.get(id);
+  const normalizedId = id.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board) return true; // new board will be created
   if (!board.passcode || board.passcode.trim() === '') return true;
   return board.passcode === passcode;
@@ -192,14 +199,26 @@ export function verifyBoardPasscode(id: string, passcode?: string | null): boole
 
 // Comment operations
 export function addCommentPin(boardId: string, comment: CommentPin): CommentPin | null {
-  const board = boardsCache.get(boardId);
-  if (!board) return null;
+  const normalizedId = boardId.toLowerCase();
+  let board = boardsCache.get(normalizedId);
+  if (!board) {
+    board = getOrCreateBoard(normalizedId);
+  }
 
   if (!board.comments) board.comments = [];
-  board.comments.push(comment);
+  
+  // Prevent duplicate comment IDs
+  const existsIndex = board.comments.findIndex((c: CommentPin) => c.id === comment.id);
+  if (existsIndex >= 0) {
+    board.comments[existsIndex] = comment;
+  } else {
+    board.comments.push(comment);
+  }
+  
   board.updatedAt = new Date().toISOString();
 
-  scheduleSave(boardId);
+  boardsCache.set(normalizedId, board);
+  scheduleSave(normalizedId);
   return comment;
 }
 
@@ -208,17 +227,18 @@ export function addCommentReply(
   commentId: string,
   reply: CommentReply
 ): CommentReply | null {
-  const board = boardsCache.get(boardId);
+  const normalizedId = boardId.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board || !board.comments) return null;
 
-  const comment = board.comments.find((c) => c.id === commentId);
+  const comment = board.comments.find((c: CommentPin) => c.id === commentId);
   if (!comment) return null;
 
   if (!comment.replies) comment.replies = [];
   comment.replies.push(reply);
   board.updatedAt = new Date().toISOString();
 
-  scheduleSave(boardId);
+  scheduleSave(normalizedId);
   return reply;
 }
 
@@ -228,10 +248,11 @@ export function toggleResolveComment(
   resolved: boolean,
   resolvedBy?: string
 ): CommentPin | null {
-  const board = boardsCache.get(boardId);
+  const normalizedId = boardId.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board || !board.comments) return null;
 
-  const comment = board.comments.find((c) => c.id === commentId);
+  const comment = board.comments.find((c: CommentPin) => c.id === commentId);
   if (!comment) return null;
 
   comment.resolved = resolved;
@@ -239,19 +260,20 @@ export function toggleResolveComment(
   comment.resolvedAt = resolved ? new Date().toISOString() : undefined;
   board.updatedAt = new Date().toISOString();
 
-  scheduleSave(boardId);
+  scheduleSave(normalizedId);
   return comment;
 }
 
 export function deleteCommentPin(boardId: string, commentId: string): boolean {
-  const board = boardsCache.get(boardId);
+  const normalizedId = boardId.toLowerCase();
+  const board = boardsCache.get(normalizedId);
   if (!board || !board.comments) return false;
 
   const initialLength = board.comments.length;
-  board.comments = board.comments.filter((c) => c.id !== commentId);
+  board.comments = board.comments.filter((c: CommentPin) => c.id !== commentId);
   if (board.comments.length !== initialLength) {
     board.updatedAt = new Date().toISOString();
-    scheduleSave(boardId);
+    scheduleSave(normalizedId);
     return true;
   }
   return false;

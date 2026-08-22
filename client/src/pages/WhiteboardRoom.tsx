@@ -290,7 +290,15 @@ export const WhiteboardRoom: React.FC = () => {
 
     // Comments real-time events
     socket.on('comment_added', (comment: CommentPin) => {
-      setComments((prev) => [...prev, comment]);
+      setComments((prev) => {
+        const existsIndex = prev.findIndex((c) => c.id === comment.id);
+        if (existsIndex >= 0) {
+          const updated = [...prev];
+          updated[existsIndex] = comment;
+          return updated;
+        }
+        return [...prev, comment];
+      });
       setActiveCommentId(comment.id);
     });
 
@@ -468,21 +476,96 @@ export const WhiteboardRoom: React.FC = () => {
     }
   };
 
-  // Comment Handlers
+  // Comment Handlers with Optimistic Updates & Explicit Metadata
   const handleAddComment = (x: number, y: number, text: string) => {
-    socket.emit('add_comment', { x, y, text });
+    const commentId = `comment-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const authorName = userName || 'Guest';
+    const authorColor = userColor || '#3b82f6';
+
+    const optimisticComment: CommentPin = {
+      id: commentId,
+      boardId,
+      x,
+      y,
+      author: authorName,
+      authorColor: authorColor,
+      text,
+      createdAt: new Date().toISOString(),
+      resolved: false,
+      replies: [],
+    };
+
+    // Immediate optimistic placement in local state
+    setComments((prev) => {
+      if (prev.some((c) => c.id === commentId)) return prev;
+      return [...prev, optimisticComment];
+    });
+    setActiveCommentId(commentId);
+
+    // Relay to socket server with complete metadata
+    socket.emit('add_comment', {
+      roomId: boardId,
+      commentId,
+      x,
+      y,
+      text,
+      author: authorName,
+      authorColor: authorColor,
+    });
   };
 
   const handleReplyComment = (commentId: string, text: string) => {
-    socket.emit('reply_comment', { commentId, text });
+    const authorName = userName || 'Guest';
+    const authorColor = userColor || '#3b82f6';
+
+    const optimisticReply = {
+      id: `reply-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      author: authorName,
+      authorColor: authorColor,
+      text,
+      createdAt: new Date().toISOString(),
+    };
+
+    setComments((prev) =>
+      prev.map((c) =>
+        c.id === commentId
+          ? { ...c, replies: [...(c.replies || []), optimisticReply] }
+          : c
+      )
+    );
+
+    socket.emit('reply_comment', {
+      roomId: boardId,
+      commentId,
+      text,
+      author: authorName,
+      authorColor: authorColor,
+    });
   };
 
   const handleResolveComment = (commentId: string, resolved: boolean) => {
-    socket.emit('resolve_comment', { commentId, resolved });
+    setComments((prev) =>
+      prev.map((c) =>
+        c.id === commentId
+          ? {
+              ...c,
+              resolved,
+              resolvedBy: resolved ? (userName || 'Guest') : undefined,
+              resolvedAt: resolved ? new Date().toISOString() : undefined,
+            }
+          : c
+      )
+    );
+
+    socket.emit('resolve_comment', { roomId: boardId, commentId, resolved });
   };
 
   const handleDeleteComment = (commentId: string) => {
-    socket.emit('delete_comment', { commentId });
+    setComments((prev) => prev.filter((c) => c.id !== commentId));
+    if (activeCommentIdRef.current === commentId) {
+      setActiveCommentId(null);
+    }
+    socket.emit('delete_comment', { roomId: boardId, commentId });
   };
 
   const handleUpdateProfile = (name: string, color: string) => {

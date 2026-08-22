@@ -405,48 +405,63 @@ io.on('connection', (socket: Socket) => {
 
   // Comment pins
   socket.on('add_comment', (data: {
+    roomId?: string;
+    commentId?: string;
     x: number;
     y: number;
     text: string;
+    author?: string;
+    authorColor?: string;
   }) => {
-    if (!currentRoomId || !currentUser) return;
+    const targetRoomId = data.roomId || currentRoomId;
+    if (!targetRoomId) return;
+
+    const authorName = currentUser?.name || data.author || 'Guest';
+    const authorColor = currentUser?.color || data.authorColor || '#3b82f6';
 
     const newComment: CommentPin = {
-      id: `comment-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      boardId: currentRoomId,
+      id: data.commentId || `comment-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      boardId: targetRoomId,
       x: data.x,
       y: data.y,
-      author: currentUser.name,
-      authorColor: currentUser.color,
+      author: authorName,
+      authorColor: authorColor,
       text: data.text,
       createdAt: new Date().toISOString(),
       resolved: false,
       replies: [],
     };
 
-    const saved = addCommentPin(currentRoomId, newComment);
+    const saved = addCommentPin(targetRoomId, newComment);
     if (saved) {
-      io.to(`room:${currentRoomId}`).emit('comment_added', saved);
+      io.to(`room:${targetRoomId}`).emit('comment_added', saved);
     }
   });
 
   socket.on('reply_comment', (data: {
+    roomId?: string;
     commentId: string;
     text: string;
+    author?: string;
+    authorColor?: string;
   }) => {
-    if (!currentRoomId || !currentUser) return;
+    const targetRoomId = data.roomId || currentRoomId;
+    if (!targetRoomId) return;
+
+    const authorName = currentUser?.name || data.author || 'Guest';
+    const authorColor = currentUser?.color || data.authorColor || '#3b82f6';
 
     const newReply: CommentReply = {
       id: `reply-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      author: currentUser.name,
-      authorColor: currentUser.color,
+      author: authorName,
+      authorColor: authorColor,
       text: data.text,
       createdAt: new Date().toISOString(),
     };
 
-    const saved = addCommentReply(currentRoomId, data.commentId, newReply);
+    const saved = addCommentReply(targetRoomId, data.commentId, newReply);
     if (saved) {
-      io.to(`room:${currentRoomId}`).emit('comment_replied', {
+      io.to(`room:${targetRoomId}`).emit('comment_replied', {
         commentId: data.commentId,
         reply: saved,
       });
@@ -454,28 +469,32 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('resolve_comment', (data: {
+    roomId?: string;
     commentId: string;
     resolved: boolean;
   }) => {
-    if (!currentRoomId || !currentUser) return;
+    const targetRoomId = data.roomId || currentRoomId;
+    if (!targetRoomId) return;
 
-    const updated = toggleResolveComment(currentRoomId, data.commentId, data.resolved, currentUser.name);
+    const resolverName = currentUser?.name || 'Guest';
+    const updated = toggleResolveComment(targetRoomId, data.commentId, data.resolved, resolverName);
     if (updated) {
-      io.to(`room:${currentRoomId}`).emit('comment_resolved', {
+      io.to(`room:${targetRoomId}`).emit('comment_resolved', {
         commentId: data.commentId,
         resolved: data.resolved,
-        resolvedBy: currentUser.name,
+        resolvedBy: resolverName,
         resolvedAt: updated.resolvedAt,
       });
     }
   });
 
-  socket.on('delete_comment', (data: { commentId: string }) => {
-    if (!currentRoomId) return;
+  socket.on('delete_comment', (data: { roomId?: string; commentId: string }) => {
+    const targetRoomId = data.roomId || currentRoomId;
+    if (!targetRoomId) return;
 
-    const deleted = deleteCommentPin(currentRoomId, data.commentId);
+    const deleted = deleteCommentPin(targetRoomId, data.commentId);
     if (deleted) {
-      io.to(`room:${currentRoomId}`).emit('comment_deleted', { commentId: data.commentId });
+      io.to(`room:${targetRoomId}`).emit('comment_deleted', { commentId: data.commentId });
     }
   });
 
