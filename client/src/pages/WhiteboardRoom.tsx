@@ -36,11 +36,38 @@ export const WhiteboardRoom: React.FC = () => {
   const excalidrawAPIRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const pendingInitialDataRef = useRef<any>(null);
+  const isInitialDataLoadedRef = useRef(false);
+
   // Stable API setter
   const handleSetExcalidrawAPI = useCallback((api: any) => {
     if (excalidrawAPIRef.current !== api) {
       excalidrawAPIRef.current = api;
       setExcalidrawAPIState(api);
+
+      // If board data arrived before API was ready, load it immediately onto canvas
+      if (pendingInitialDataRef.current && api) {
+        const board = pendingInitialDataRef.current;
+        try {
+          isUpdatingFromSocketRef.current = true;
+          api.updateScene({
+            elements: board.elements || [],
+            appState: board.appState,
+            commitToHistory: false,
+          });
+          if (board.files && Object.keys(board.files).length > 0) {
+            api.addFiles(Object.values(board.files));
+          }
+          lastSyncElementsRef.current = JSON.stringify(board.elements || []);
+          isInitialDataLoadedRef.current = true;
+        } catch (err) {
+          console.warn('Initial API scene update error:', err);
+        } finally {
+          setTimeout(() => {
+            isUpdatingFromSocketRef.current = false;
+          }, 150);
+        }
+      }
     }
   }, []);
 
@@ -98,6 +125,31 @@ export const WhiteboardRoom: React.FC = () => {
         const board = await fetchBoard(boardId);
         setBoardData(board);
         setComments(board.comments || []);
+        pendingInitialDataRef.current = board;
+
+        // If API is already ready, load scene immediately
+        const api = excalidrawAPIRef.current;
+        if (api && board) {
+          try {
+            isUpdatingFromSocketRef.current = true;
+            api.updateScene({
+              elements: board.elements || [],
+              appState: board.appState,
+              commitToHistory: false,
+            });
+            if (board.files && Object.keys(board.files).length > 0) {
+              api.addFiles(Object.values(board.files));
+            }
+            lastSyncElementsRef.current = JSON.stringify(board.elements || []);
+            isInitialDataLoadedRef.current = true;
+          } catch (err) {
+            console.warn('FetchBoard scene load error:', err);
+          } finally {
+            setTimeout(() => {
+              isUpdatingFromSocketRef.current = false;
+            }, 150);
+          }
+        }
 
         if (board.hasPasscode) {
           setIsPasscodeRequired(true);
@@ -152,6 +204,8 @@ export const WhiteboardRoom: React.FC = () => {
         setUserColor(data.currentUser.color);
       }
 
+      pendingInitialDataRef.current = data.board;
+
       // Load initial elements onto Excalidraw
       const api = excalidrawAPIRef.current;
       if (api && data.board) {
@@ -166,12 +220,13 @@ export const WhiteboardRoom: React.FC = () => {
             api.addFiles(Object.values(data.board.files));
           }
           lastSyncElementsRef.current = JSON.stringify(data.board.elements || []);
+          isInitialDataLoadedRef.current = true;
         } catch (err) {
           console.warn('Initial scene load error:', err);
         } finally {
           setTimeout(() => {
             isUpdatingFromSocketRef.current = false;
-          }, 100);
+          }, 150);
         }
       }
     });
@@ -328,6 +383,7 @@ export const WhiteboardRoom: React.FC = () => {
         setViewport({ scrollX, scrollY, zoom });
       }
 
+      if (!isInitialDataLoadedRef.current) return; // Do not broadcast until initial board scene has loaded
       if (isUpdatingFromSocketRef.current) return;
       if (userRoleRef.current === 'commenter') return; // Commenters cannot edit elements
 
