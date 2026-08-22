@@ -148,6 +148,11 @@ app.post('/api/admin/logout', (req, res) => {
   res.json({ success: true });
 });
 
+// ---------------- HEALTH CHECK ----------------
+app.get(['/api/health', '/health'], (req, res) => {
+  res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+});
+
 // ---------------- REST API ----------------
 
 // Get list of all boards for Dashboard (Admin only)
