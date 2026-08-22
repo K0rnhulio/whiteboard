@@ -519,9 +519,13 @@ if (fs.existsSync(CLIENT_DIST)) {
         .replace(/name="twitter:image" content="[^"]*"/gi, `name="twitter:image" content="${absoluteOgImage}"`);
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       return res.send(html);
     } catch (err) {
       console.error('Error serving index.html:', err);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.sendFile(INDEX_HTML_PATH);
     }
   });
