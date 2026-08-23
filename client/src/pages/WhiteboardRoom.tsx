@@ -13,6 +13,9 @@ import {
   FileText,
   Check,
   ChevronDown,
+  Maximize2,
+  ZoomIn,
+  ZoomOut,
   Eye,
   Edit3,
   MousePointer,
@@ -42,6 +45,25 @@ export const WhiteboardRoom: React.FC = () => {
 
   const pendingInitialDataRef = useRef<any>(null);
   const isInitialDataLoadedRef = useRef(false);
+  const hasAutoFittedRef = useRef(false);
+
+  // Auto-fit helper to fit all elements cleanly on screen on load (100% board view)
+  const autoFitScene = useCallback((api: any, elements: any[]) => {
+    if (!api || !elements || elements.length === 0) return;
+    if (hasAutoFittedRef.current) return;
+    hasAutoFittedRef.current = true;
+    setTimeout(() => {
+      try {
+        api.scrollToContent(elements, {
+          fitToViewport: true,
+          viewportZoomFactor: window.innerWidth < 640 ? 0.94 : 0.88,
+          animate: false,
+        });
+      } catch (err) {
+        console.warn('autoFitScene error:', err);
+      }
+    }, 180);
+  }, []);
 
   // Stable API setter
   const handleSetExcalidrawAPI = useCallback((api: any) => {
@@ -64,6 +86,7 @@ export const WhiteboardRoom: React.FC = () => {
           }
           lastSyncElementsRef.current = JSON.stringify(board.elements || []);
           isInitialDataLoadedRef.current = true;
+          autoFitScene(api, board.elements || []);
         } catch (err) {
           console.warn('Initial API scene update error:', err);
         } finally {
@@ -73,7 +96,7 @@ export const WhiteboardRoom: React.FC = () => {
         }
       }
     }
-  }, []);
+  }, [autoFitScene]);
 
   // User Profile
   const [userName, setUserName] = useState<string>(() => {
@@ -149,6 +172,7 @@ export const WhiteboardRoom: React.FC = () => {
               api.addFiles(Object.values(board.files));
             }
             lastSyncElementsRef.current = JSON.stringify(board.elements || []);
+            autoFitScene(api, board.elements || []);
           } catch (err) {
             console.warn('FetchBoard scene load error:', err);
           } finally {
@@ -171,7 +195,7 @@ export const WhiteboardRoom: React.FC = () => {
     }
 
     init();
-  }, [boardId]);
+  }, [boardId, autoFitScene]);
 
   const handlePasscodeSuccess = () => {
     setIsPasscodeRequired(false);
@@ -230,6 +254,7 @@ export const WhiteboardRoom: React.FC = () => {
             api.addFiles(Object.values(data.board.files));
           }
           lastSyncElementsRef.current = JSON.stringify(data.board.elements || []);
+          autoFitScene(api, data.board.elements || []);
         } catch (err) {
           console.warn('Initial scene load error:', err);
         } finally {
@@ -607,6 +632,66 @@ export const WhiteboardRoom: React.FC = () => {
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
   };
+
+  // Viewport Navigation & Fit to Screen Helpers
+  const handleFitToScreen = useCallback(() => {
+    const api = excalidrawAPIRef.current;
+    if (!api) return;
+    const elements = api.getSceneElements();
+    if (elements && elements.length > 0) {
+      api.scrollToContent(elements, {
+        fitToViewport: true,
+        viewportZoomFactor: window.innerWidth < 640 ? 0.94 : 0.88,
+        animate: true,
+        duration: 300,
+      });
+    } else {
+      api.scrollToContent(undefined, {
+        fitToViewport: true,
+        animate: true,
+      });
+    }
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    const api = excalidrawAPIRef.current;
+    if (!api) return;
+    const appState = api.getAppState();
+    const current = appState.zoom?.value || 1;
+    const nextZoom = Math.min(Number((current * 1.25).toFixed(2)), 5);
+    api.updateScene({
+      appState: {
+        ...appState,
+        zoom: { value: nextZoom },
+      },
+    });
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    const api = excalidrawAPIRef.current;
+    if (!api) return;
+    const appState = api.getAppState();
+    const current = appState.zoom?.value || 1;
+    const nextZoom = Math.max(Number((current / 1.25).toFixed(2)), 0.1);
+    api.updateScene({
+      appState: {
+        ...appState,
+        zoom: { value: nextZoom },
+      },
+    });
+  }, []);
+
+  const handleResetZoom = useCallback(() => {
+    const api = excalidrawAPIRef.current;
+    if (!api) return;
+    const appState = api.getAppState();
+    api.updateScene({
+      appState: {
+        ...appState,
+        zoom: { value: 1 },
+      },
+    });
+  }, []);
 
   // Remote cursor screen projection helper
   const getPointerScreenPos = (sceneX: number, sceneY: number) => {
@@ -1029,6 +1114,43 @@ export const WhiteboardRoom: React.FC = () => {
           onDeleteComment={handleDeleteComment}
           containerRef={containerRef}
         />
+
+        {/* Quick Viewport Navigation Toolbar (Mobile & Desktop) */}
+        <div className="absolute bottom-5 left-4 z-20 flex items-center bg-white/95 backdrop-blur-md shadow-xl border border-slate-200/80 rounded-2xl p-1 text-slate-700 select-none">
+          <button
+            onClick={handleZoomOut}
+            className="p-2 hover:bg-slate-100 active:bg-slate-200 rounded-xl transition cursor-pointer"
+            title="Zoom Out (-)"
+          >
+            <ZoomOut className="w-4 h-4 text-slate-700" />
+          </button>
+          <button
+            onClick={handleResetZoom}
+            className="px-2 py-1 text-xs font-bold text-slate-800 hover:bg-slate-100 active:bg-slate-200 rounded-xl transition cursor-pointer min-w-[50px] text-center"
+            title="Reset Zoom to 100%"
+          >
+            {Math.round((viewport.zoom || 1) * 100)}%
+          </button>
+          <button
+            onClick={handleZoomIn}
+            className="p-2 hover:bg-slate-100 active:bg-slate-200 rounded-xl transition cursor-pointer"
+            title="Zoom In (+)"
+          >
+            <ZoomIn className="w-4 h-4 text-slate-700" />
+          </button>
+
+          <div className="w-[1px] h-4 bg-slate-200 mx-1" />
+
+          <button
+            onClick={handleFitToScreen}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 text-blue-700 rounded-xl text-xs font-bold transition cursor-pointer"
+            title="Fit All Content to Screen (100% Board View)"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Fit to Screen</span>
+            <span className="sm:hidden">Fit</span>
+          </button>
+        </div>
 
         {/* Comments Sidebar Panel */}
         <CommentsSidebar
