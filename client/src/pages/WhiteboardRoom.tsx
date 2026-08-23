@@ -9,6 +9,10 @@ import {
   ArrowLeft,
   Lock,
   Download,
+  Upload,
+  FileText,
+  Check,
+  ChevronDown,
   Eye,
   Edit3,
   MousePointer,
@@ -88,6 +92,9 @@ export const WhiteboardRoom: React.FC = () => {
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isCommentsSidebarOpen, setIsCommentsSidebarOpen] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Board Data & Sync state
   const [boardData, setBoardData] = useState<BoardData | null>(null);
@@ -476,6 +483,154 @@ export const WhiteboardRoom: React.FC = () => {
     }
   };
 
+  // Export board as .excalidraw native file
+  const handleExportExcalidraw = () => {
+    if (!excalidrawAPI) return;
+    try {
+      const elements = excalidrawAPI.getSceneElements();
+      const appState = excalidrawAPI.getAppState();
+      const files = excalidrawAPI.getFiles();
+
+      const data = {
+        type: 'excalidraw',
+        version: 2,
+        source: 'https://whiteboard.app',
+        elements,
+        appState: {
+          viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
+          gridSize: appState.gridSize || null,
+        },
+        files: files || {},
+      };
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${boardData?.name || 'whiteboard'}.excalidraw`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Excalidraw export failed:', err);
+    }
+  };
+
+  // Import .excalidraw or .json file
+  const handleImportFile = (file: File) => {
+    if (!file) return;
+    const reader = new FileReader();
+
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) return;
+
+        const data = JSON.parse(text);
+        const api = excalidrawAPIRef.current;
+        if (!api) return;
+
+        let importedElements: any[] = [];
+        let importedAppState: any = {};
+        let importedFiles: any = {};
+
+        if (Array.isArray(data)) {
+          importedElements = data;
+        } else if (data && typeof data === 'object') {
+          importedElements = data.elements || [];
+          importedAppState = data.appState || {};
+          importedFiles = data.files || {};
+        }
+
+        if (!Array.isArray(importedElements) || importedElements.length === 0) {
+          alert('No valid drawing elements found in this file.');
+          return;
+        }
+
+        // Add any image files
+        if (importedFiles && Object.keys(importedFiles).length > 0) {
+          api.addFiles(Object.values(importedFiles));
+        }
+
+        isUpdatingFromSocketRef.current = true;
+        api.updateScene({
+          elements: importedElements,
+          appState: {
+            ...api.getAppState(),
+            ...(importedAppState.viewBackgroundColor ? { viewBackgroundColor: importedAppState.viewBackgroundColor } : {}),
+          },
+          commitToHistory: true,
+        });
+
+        setTimeout(() => {
+          isUpdatingFromSocketRef.current = false;
+          api.scrollToContent(importedElements, { animate: true });
+        }, 100);
+
+        lastSyncElementsRef.current = JSON.stringify(importedElements);
+        socket.emit('sync_elements', {
+          roomId: boardId,
+          elements: importedElements,
+          appState: {
+            viewBackgroundColor: importedAppState.viewBackgroundColor || '#ffffff',
+          },
+          files: importedFiles,
+        });
+
+        setImportStatus(`Successfully imported ${importedElements.length} elements!`);
+        setTimeout(() => setImportStatus(null), 3500);
+      } catch (err: any) {
+        console.error('Failed to parse .excalidraw file:', err);
+        alert('Invalid .excalidraw or JSON file format.');
+      }
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleImportFile(file);
+      e.target.value = '';
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (userRole !== 'editor') return;
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.name.endsWith('.excalidraw') || file.name.endsWith('.json') || file.name.endsWith('.excalidrawlib'))) {
+      handleImportFile(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  };
+
+  // Remote cursor screen projection helper
+  const getPointerScreenPos = (sceneX: number, sceneY: number) => {
+    return {
+      x: (sceneX + viewport.scrollX) * viewport.zoom,
+      y: (sceneY + viewport.scrollY) * viewport.zoom,
+    };
+  };
+
+  // Memoize UI options so Excalidraw never sees a new object reference
+  const uiOptions = useMemo(
+    () => ({
+      canvasActions: {
+        changeViewBackgroundColor: true,
+        clearCanvas: userRole === 'editor',
+        loadScene: userRole === 'editor',
+        saveToActiveFile: false,
+        toggleTheme: true,
+        saveAsImage: true,
+      },
+    }),
+    [userRole]
+  );
+
   // Comment Handlers with Optimistic Updates & Explicit Metadata
   const handleAddComment = (x: number, y: number, text: string) => {
     const commentId = `comment-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -575,29 +730,6 @@ export const WhiteboardRoom: React.FC = () => {
     localStorage.setItem('wb_user_color', color);
     socket.emit('update_profile', { name, color });
   };
-
-  // Remote cursor screen projection helper
-  const getPointerScreenPos = (sceneX: number, sceneY: number) => {
-    return {
-      x: (sceneX + viewport.scrollX) * viewport.zoom,
-      y: (sceneY + viewport.scrollY) * viewport.zoom,
-    };
-  };
-
-  // Memoize UI options so Excalidraw never sees a new object reference
-  const uiOptions = useMemo(
-    () => ({
-      canvasActions: {
-        changeViewBackgroundColor: true,
-        clearCanvas: userRole === 'editor',
-        loadScene: false,
-        saveToActiveFile: false,
-        toggleTheme: true,
-        saveAsImage: true,
-      },
-    }),
-    [userRole]
-  );
 
   const initialData = useMemo(() => {
     if (!boardData) return undefined;
@@ -707,15 +839,76 @@ export const WhiteboardRoom: React.FC = () => {
             onUpdateProfile={handleUpdateProfile}
           />
 
-          {/* Export PNG */}
-          <button
-            onClick={handleExportPNG}
-            className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 transition cursor-pointer"
-            title="Download PNG"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export</span>
-          </button>
+          {/* Import .excalidraw Button (Editor Only) */}
+          {userRole === 'editor' && (
+            <>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 transition cursor-pointer"
+                title="Upload & import .excalidraw or .json file"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                <span>Import</span>
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileInputChange}
+                accept=".excalidraw,.json,.excalidrawlib"
+                className="hidden"
+              />
+            </>
+          )}
+
+          {/* Export Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
+              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 transition cursor-pointer"
+              title="Export board options"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-600" />
+              <span>Export</span>
+              <ChevronDown className="w-3 h-3 text-slate-400" />
+            </button>
+
+            {isExportMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsExportMenuOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-1.5 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 p-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
+                  <button
+                    onClick={() => {
+                      setIsExportMenuOpen(false);
+                      handleExportPNG();
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-50 rounded-xl flex items-center gap-2 font-medium text-slate-700 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4 text-blue-600" />
+                    <div>
+                      <div className="font-semibold">Export as PNG</div>
+                      <div className="text-[10px] text-slate-400">High-res canvas image</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsExportMenuOpen(false);
+                      handleExportExcalidraw();
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-50 rounded-xl flex items-center gap-2 font-medium text-slate-700 cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <FileText className="w-4 h-4 text-purple-600" />
+                    <div>
+                      <div className="font-semibold">Export .excalidraw</div>
+                      <div className="text-[10px] text-slate-400">Native editable vector file</div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Share Button */}
           <button
@@ -737,12 +930,21 @@ export const WhiteboardRoom: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Canvas Container */}
+      {/* Main Canvas Container with Drag & Drop */}
       <div
         ref={containerRef}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
         className="flex-1 min-h-0 relative w-full h-[calc(100vh-3.5rem)] excalidraw-container"
         style={{ height: 'calc(100vh - 3.5rem)', width: '100vw' }}
       >
+        {/* Import Success Notification Badge */}
+        {importStatus && (
+          <div className="absolute top-4 right-6 z-50 bg-emerald-600 text-white px-4 py-2 rounded-2xl shadow-xl text-xs font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+            <Check className="w-4 h-4" />
+            <span>{importStatus}</span>
+          </div>
+        )}
         {/* Comment Mode Instruction Banner */}
         {isCommentMode && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-slate-900/90 text-white pl-4 pr-3 py-1.5 rounded-full text-xs font-semibold shadow-xl backdrop-blur flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
