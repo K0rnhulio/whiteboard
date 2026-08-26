@@ -30,6 +30,7 @@ import { PasscodeModal } from '../components/PasscodeModal';
 import { NamePromptModal } from '../components/NamePromptModal';
 import { BoardSettingsModal } from '../components/BoardSettingsModal';
 import { BoardData, CollaboratorUser, CommentPin, UserRole } from '../types';
+import { optimizeImageForWhiteboard } from '../utils/imageCompressor';
 
 export const WhiteboardRoom: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
@@ -445,103 +446,98 @@ export const WhiteboardRoom: React.FC = () => {
           e.preventDefault();
 
           const reader = new FileReader();
-          reader.onload = () => {
-            const dataURL = reader.result as string;
-            if (!dataURL) return;
+          reader.onload = async () => {
+            const rawDataURL = reader.result as string;
+            if (!rawDataURL) return;
 
-            const img = new Image();
-            img.onload = () => {
-              const api = excalidrawAPIRef.current;
-              if (!api) return;
+            // Automatically compress & optimize screenshot down by ~95%
+            const { dataURL, mimeType, width, height } = await optimizeImageForWhiteboard(rawDataURL);
 
-              const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-              const binaryFile = {
-                id: fileId,
-                dataURL,
-                mimeType: file.type || 'image/png',
-                created: Date.now(),
-                lastRetrieved: Date.now(),
-              };
+            const api = excalidrawAPIRef.current;
+            if (!api) return;
 
-              // 1. Add binary file to Excalidraw instance and tracking ref
-              api.addFiles([binaryFile]);
-              knownFilesRef.current = {
-                ...knownFilesRef.current,
-                [fileId]: binaryFile,
-              };
-
-              // 2. Compute size and center at current viewport
-              const appState = api.getAppState();
-              const naturalWidth = img.naturalWidth || 600;
-              const naturalHeight = img.naturalHeight || 400;
-
-              // Scale large screenshots proportionally to fit comfortably
-              const maxDim = 800;
-              let displayWidth = naturalWidth;
-              let displayHeight = naturalHeight;
-              if (displayWidth > maxDim || displayHeight > maxDim) {
-                const scale = maxDim / Math.max(displayWidth, displayHeight);
-                displayWidth = Math.round(displayWidth * scale);
-                displayHeight = Math.round(displayHeight * scale);
-              }
-
-              const zoom = appState.zoom?.value || 1;
-              const scrollX = appState.scrollX || 0;
-              const scrollY = appState.scrollY || 0;
-
-              const centerX = -scrollX + (window.innerWidth / 2) / zoom - displayWidth / 2;
-              const centerY = -scrollY + (window.innerHeight / 2) / zoom - displayHeight / 2;
-
-              const imageElement = {
-                id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-                type: 'image',
-                x: Math.round(centerX),
-                y: Math.round(centerY),
-                width: displayWidth,
-                height: displayHeight,
-                angle: 0,
-                strokeColor: 'transparent',
-                backgroundColor: 'transparent',
-                fillStyle: 'solid',
-                strokeWidth: 1,
-                strokeStyle: 'solid',
-                roughness: 1,
-                opacity: 100,
-                groupIds: [],
-                frameId: null,
-                roundness: null,
-                seed: Math.floor(Math.random() * 100000),
-                version: 1,
-                versionNonce: Math.floor(Math.random() * 100000),
-                isDeleted: false,
-                boundElements: null,
-                updated: Date.now(),
-                link: null,
-                locked: false,
-                fileId,
-                status: 'saved',
-                scale: [1, 1],
-              };
-
-              const prevElements = api.getSceneElements() || [];
-              const newElements = [...prevElements, imageElement];
-
-              api.updateScene({
-                elements: newElements,
-                commitToHistory: true,
-              });
-
-              lastSyncElementsRef.current = JSON.stringify(newElements);
-              socket.emit('sync_elements', {
-                roomId: boardId,
-                elements: newElements,
-                appState: {
-                  viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
-                },
-                files: knownFilesRef.current,
-              });
+            const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            const binaryFile = {
+              id: fileId,
+              dataURL,
+              mimeType,
+              created: Date.now(),
+              lastRetrieved: Date.now(),
             };
-            img.src = dataURL;
+
+            // 1. Add binary file to Excalidraw instance and tracking ref
+            api.addFiles([binaryFile]);
+            knownFilesRef.current = {
+              ...knownFilesRef.current,
+              [fileId]: binaryFile,
+            };
+
+            // 2. Compute size and center at current viewport
+            const appState = api.getAppState();
+            const maxDim = 800;
+            let displayWidth = width;
+            let displayHeight = height;
+            if (displayWidth > maxDim || displayHeight > maxDim) {
+              const scale = maxDim / Math.max(displayWidth, displayHeight);
+              displayWidth = Math.round(displayWidth * scale);
+              displayHeight = Math.round(displayHeight * scale);
+            }
+
+            const zoom = appState.zoom?.value || 1;
+            const scrollX = appState.scrollX || 0;
+            const scrollY = appState.scrollY || 0;
+
+            const centerX = -scrollX + (window.innerWidth / 2) / zoom - displayWidth / 2;
+            const centerY = -scrollY + (window.innerHeight / 2) / zoom - displayHeight / 2;
+
+            const imageElement = {
+              id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+              type: 'image',
+              x: Math.round(centerX),
+              y: Math.round(centerY),
+              width: displayWidth,
+              height: displayHeight,
+              angle: 0,
+              strokeColor: 'transparent',
+              backgroundColor: 'transparent',
+              fillStyle: 'solid',
+              strokeWidth: 1,
+              strokeStyle: 'solid',
+              roughness: 1,
+              opacity: 100,
+              groupIds: [],
+              frameId: null,
+              roundness: null,
+              seed: Math.floor(Math.random() * 100000),
+              version: 1,
+              versionNonce: Math.floor(Math.random() * 100000),
+              isDeleted: false,
+              boundElements: null,
+              updated: Date.now(),
+              link: null,
+              locked: false,
+              fileId,
+              status: 'saved',
+              scale: [1, 1],
+            };
+
+            const prevElements = api.getSceneElements() || [];
+            const newElements = [...prevElements, imageElement];
+
+            api.updateScene({
+              elements: newElements,
+              commitToHistory: true,
+            });
+
+            lastSyncElementsRef.current = JSON.stringify(newElements);
+            socket.emit('sync_elements', {
+              roomId: boardId,
+              elements: newElements,
+              appState: {
+                viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
+              },
+              files: knownFilesRef.current,
+            });
           };
           reader.readAsDataURL(file);
           break;
@@ -580,7 +576,19 @@ export const WhiteboardRoom: React.FC = () => {
 
       // Merge all binary files into knownFilesRef so no files are dropped during debounce
       if (files && Object.keys(files).length > 0) {
-        knownFilesRef.current = { ...knownFilesRef.current, ...files };
+        for (const [fId, f] of Object.entries(files)) {
+          if (f && (f as any).dataURL && (f as any).dataURL.length > 350 * 1024) {
+            optimizeImageForWhiteboard((f as any).dataURL).then(({ dataURL: optUrl, mimeType: optMime }) => {
+              knownFilesRef.current[fId] = {
+                ...(f as any),
+                dataURL: optUrl,
+                mimeType: optMime,
+              };
+            });
+          } else {
+            knownFilesRef.current[fId] = f;
+          }
+        }
       }
       const currentApiFiles = excalidrawAPIRef.current?.getFiles();
       if (currentApiFiles && Object.keys(currentApiFiles).length > 0) {
@@ -724,6 +732,7 @@ export const WhiteboardRoom: React.FC = () => {
 
         // Add any image files
         if (importedFiles && Object.keys(importedFiles).length > 0) {
+          knownFilesRef.current = { ...knownFilesRef.current, ...importedFiles };
           api.addFiles(Object.values(importedFiles));
         }
 
@@ -749,7 +758,7 @@ export const WhiteboardRoom: React.FC = () => {
           appState: {
             viewBackgroundColor: importedAppState.viewBackgroundColor || '#ffffff',
           },
-          files: importedFiles,
+          files: knownFilesRef.current,
         });
 
         setImportStatus(`Successfully imported ${importedElements.length} elements!`);

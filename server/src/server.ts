@@ -31,14 +31,14 @@ const io = new Server(server, {
     origin: '*',
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   },
-  maxHttpBufferSize: 50 * 1024 * 1024, // 50MB for image data
+  maxHttpBufferSize: 100 * 1024 * 1024, // 100MB buffer for rich image data
 });
 
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // Active users tracking: roomId -> (socketId -> CollaboratorUser)
 const roomCollaborators = new Map<string, Map<string, CollaboratorUser>>();
