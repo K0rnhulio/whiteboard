@@ -46,6 +46,7 @@ export const WhiteboardRoom: React.FC = () => {
   const pendingInitialDataRef = useRef<any>(null);
   const isInitialDataLoadedRef = useRef(false);
   const hasAutoFittedRef = useRef(false);
+  const knownFilesRef = useRef<Record<string, any>>({});
 
   // Auto-fit helper to fit all elements cleanly on screen on load (100% board view)
   const autoFitScene = useCallback((api: any, elements: any[]) => {
@@ -76,14 +77,16 @@ export const WhiteboardRoom: React.FC = () => {
         const board = pendingInitialDataRef.current;
         try {
           isUpdatingFromSocketRef.current = true;
+          // CRITICAL: Always add image binary files to Excalidraw store BEFORE updating scene elements
+          if (board.files && Object.keys(board.files).length > 0) {
+            knownFilesRef.current = { ...knownFilesRef.current, ...board.files };
+            api.addFiles(Object.values(board.files));
+          }
           api.updateScene({
             elements: board.elements || [],
             appState: board.appState,
             commitToHistory: false,
           });
-          if (board.files && Object.keys(board.files).length > 0) {
-            api.addFiles(Object.values(board.files));
-          }
           lastSyncElementsRef.current = JSON.stringify(board.elements || []);
           isInitialDataLoadedRef.current = true;
           autoFitScene(api, board.elements || []);
@@ -163,14 +166,16 @@ export const WhiteboardRoom: React.FC = () => {
         if (api && board) {
           try {
             isUpdatingFromSocketRef.current = true;
+            // CRITICAL: Always add binary files before updating scene elements
+            if (board.files && Object.keys(board.files).length > 0) {
+              knownFilesRef.current = { ...knownFilesRef.current, ...board.files };
+              api.addFiles(Object.values(board.files));
+            }
             api.updateScene({
               elements: board.elements || [],
               appState: board.appState,
               commitToHistory: false,
             });
-            if (board.files && Object.keys(board.files).length > 0) {
-              api.addFiles(Object.values(board.files));
-            }
             lastSyncElementsRef.current = JSON.stringify(board.elements || []);
             autoFitScene(api, board.elements || []);
           } catch (err) {
@@ -245,14 +250,16 @@ export const WhiteboardRoom: React.FC = () => {
       if (api && data.board) {
         try {
           isUpdatingFromSocketRef.current = true;
+          // CRITICAL: Always add binary files before updating scene elements
+          if (data.board.files && Object.keys(data.board.files).length > 0) {
+            knownFilesRef.current = { ...knownFilesRef.current, ...data.board.files };
+            api.addFiles(Object.values(data.board.files));
+          }
           api.updateScene({
             elements: data.board.elements || [],
             appState: data.board.appState,
             commitToHistory: false,
           });
-          if (data.board.files && Object.keys(data.board.files).length > 0) {
-            api.addFiles(Object.values(data.board.files));
-          }
           lastSyncElementsRef.current = JSON.stringify(data.board.elements || []);
           autoFitScene(api, data.board.elements || []);
         } catch (err) {
@@ -274,13 +281,15 @@ export const WhiteboardRoom: React.FC = () => {
       if (api) {
         try {
           isUpdatingFromSocketRef.current = true;
+          // CRITICAL: Always add binary files before updating scene elements
+          if (data.files && Object.keys(data.files).length > 0) {
+            knownFilesRef.current = { ...knownFilesRef.current, ...data.files };
+            api.addFiles(Object.values(data.files));
+          }
           api.updateScene({
             elements: data.elements || [],
             commitToHistory: false,
           });
-          if (data.files && Object.keys(data.files).length > 0) {
-            api.addFiles(Object.values(data.files));
-          }
           lastSyncElementsRef.current = JSON.stringify(data.elements || []);
         } catch (err) {
           console.warn('Sync update error:', err);
@@ -387,14 +396,16 @@ export const WhiteboardRoom: React.FC = () => {
     if (excalidrawAPI && boardData?.elements && boardData.elements.length > 0) {
       try {
         isUpdatingFromSocketRef.current = true;
+        // CRITICAL: Always add binary files before updating scene elements
+        if (boardData.files && Object.keys(boardData.files).length > 0) {
+          knownFilesRef.current = { ...knownFilesRef.current, ...boardData.files };
+          excalidrawAPI.addFiles(Object.values(boardData.files));
+        }
         excalidrawAPI.updateScene({
           elements: boardData.elements,
           appState: boardData.appState,
           commitToHistory: false,
         });
-        if (boardData.files && Object.keys(boardData.files).length > 0) {
-          excalidrawAPI.addFiles(Object.values(boardData.files));
-        }
         lastSyncElementsRef.current = JSON.stringify(boardData.elements);
       } catch (err) {
         console.warn('Initial API updateScene error:', err);
@@ -405,6 +416,144 @@ export const WhiteboardRoom: React.FC = () => {
       }
     }
   }, [excalidrawAPI]); // Only runs when excalidrawAPI instance changes (once)
+
+  // Clipboard Screenshot & Image Paste Handler (Ctrl+V / Cmd+V anywhere on whiteboard)
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      // Don't intercept paste if focused on an input/textarea (e.g. comment field, name input)
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (userRoleRef.current === 'commenter') return;
+
+      const items = e.clipboardData?.items;
+      if (!items || items.length === 0) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (!file) continue;
+
+          e.preventDefault();
+
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataURL = reader.result as string;
+            if (!dataURL) return;
+
+            const img = new Image();
+            img.onload = () => {
+              const api = excalidrawAPIRef.current;
+              if (!api) return;
+
+              const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+              const binaryFile = {
+                id: fileId,
+                dataURL,
+                mimeType: file.type || 'image/png',
+                created: Date.now(),
+                lastRetrieved: Date.now(),
+              };
+
+              // 1. Add binary file to Excalidraw instance and tracking ref
+              api.addFiles([binaryFile]);
+              knownFilesRef.current = {
+                ...knownFilesRef.current,
+                [fileId]: binaryFile,
+              };
+
+              // 2. Compute size and center at current viewport
+              const appState = api.getAppState();
+              const naturalWidth = img.naturalWidth || 600;
+              const naturalHeight = img.naturalHeight || 400;
+
+              // Scale large screenshots proportionally to fit comfortably
+              const maxDim = 800;
+              let displayWidth = naturalWidth;
+              let displayHeight = naturalHeight;
+              if (displayWidth > maxDim || displayHeight > maxDim) {
+                const scale = maxDim / Math.max(displayWidth, displayHeight);
+                displayWidth = Math.round(displayWidth * scale);
+                displayHeight = Math.round(displayHeight * scale);
+              }
+
+              const zoom = appState.zoom?.value || 1;
+              const scrollX = appState.scrollX || 0;
+              const scrollY = appState.scrollY || 0;
+
+              const centerX = -scrollX + (window.innerWidth / 2) / zoom - displayWidth / 2;
+              const centerY = -scrollY + (window.innerHeight / 2) / zoom - displayHeight / 2;
+
+              const imageElement = {
+                id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                type: 'image',
+                x: Math.round(centerX),
+                y: Math.round(centerY),
+                width: displayWidth,
+                height: displayHeight,
+                angle: 0,
+                strokeColor: 'transparent',
+                backgroundColor: 'transparent',
+                fillStyle: 'solid',
+                strokeWidth: 1,
+                strokeStyle: 'solid',
+                roughness: 1,
+                opacity: 100,
+                groupIds: [],
+                frameId: null,
+                roundness: null,
+                seed: Math.floor(Math.random() * 100000),
+                version: 1,
+                versionNonce: Math.floor(Math.random() * 100000),
+                isDeleted: false,
+                boundElements: null,
+                updated: Date.now(),
+                link: null,
+                locked: false,
+                fileId,
+                status: 'saved',
+                scale: [1, 1],
+              };
+
+              const prevElements = api.getSceneElements() || [];
+              const newElements = [...prevElements, imageElement];
+
+              api.updateScene({
+                elements: newElements,
+                commitToHistory: true,
+              });
+
+              lastSyncElementsRef.current = JSON.stringify(newElements);
+              socket.emit('sync_elements', {
+                roomId: boardId,
+                elements: newElements,
+                appState: {
+                  viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
+                },
+                files: knownFilesRef.current,
+              });
+            };
+            img.src = dataURL;
+          };
+          reader.readAsDataURL(file);
+          break;
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [boardId, socket]);
 
   // Excalidraw Change Handler (strictly guarded against infinite loops)
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -429,17 +578,20 @@ export const WhiteboardRoom: React.FC = () => {
       if (isUpdatingFromSocketRef.current) return;
       if (userRoleRef.current === 'commenter') return; // Commenters cannot edit elements
 
+      // Merge all binary files into knownFilesRef so no files are dropped during debounce
+      if (files && Object.keys(files).length > 0) {
+        knownFilesRef.current = { ...knownFilesRef.current, ...files };
+      }
+      const currentApiFiles = excalidrawAPIRef.current?.getFiles();
+      if (currentApiFiles && Object.keys(currentApiFiles).length > 0) {
+        knownFilesRef.current = { ...knownFilesRef.current, ...currentApiFiles };
+      }
+
       const serialized = JSON.stringify(elements);
       if (serialized === lastSyncElementsRef.current) return;
 
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
-      }
-
-      const filesCount = files ? Object.keys(files).length : 0;
-      const filesChanged = filesCount !== lastFilesCountRef.current;
-      if (filesChanged) {
-        lastFilesCountRef.current = filesCount;
       }
 
       syncTimeoutRef.current = setTimeout(() => {
@@ -450,8 +602,7 @@ export const WhiteboardRoom: React.FC = () => {
           appState: {
             viewBackgroundColor: appState.viewBackgroundColor,
           },
-          // Only send files payload when images are actually added/changed to save bandwidth
-          ...(filesChanged ? { files } : {}),
+          files: knownFilesRef.current,
         });
       }, 100); // 100ms debounce for high snappiness
     },
