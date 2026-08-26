@@ -48,6 +48,8 @@ export const WhiteboardRoom: React.FC = () => {
   const isInitialDataLoadedRef = useRef(false);
   const hasAutoFittedRef = useRef(false);
   const knownFilesRef = useRef<Record<string, any>>({});
+  const syncedFileIdsRef = useRef<Set<string>>(new Set());
+  const pendingDeltaFilesRef = useRef<Record<string, any>>({});
 
   // Auto-fit helper to fit all elements cleanly on screen on load (100% board view)
   const autoFitScene = useCallback((api: any, elements: any[]) => {
@@ -81,6 +83,7 @@ export const WhiteboardRoom: React.FC = () => {
           // CRITICAL: Always add image binary files to Excalidraw store BEFORE updating scene elements
           if (board.files && Object.keys(board.files).length > 0) {
             knownFilesRef.current = { ...knownFilesRef.current, ...board.files };
+            Object.keys(board.files).forEach((id) => syncedFileIdsRef.current.add(id));
             api.addFiles(Object.values(board.files));
           }
           api.updateScene({
@@ -170,6 +173,7 @@ export const WhiteboardRoom: React.FC = () => {
             // CRITICAL: Always add binary files before updating scene elements
             if (board.files && Object.keys(board.files).length > 0) {
               knownFilesRef.current = { ...knownFilesRef.current, ...board.files };
+              Object.keys(board.files).forEach((id) => syncedFileIdsRef.current.add(id));
               api.addFiles(Object.values(board.files));
             }
             api.updateScene({
@@ -254,6 +258,7 @@ export const WhiteboardRoom: React.FC = () => {
           // CRITICAL: Always add binary files before updating scene elements
           if (data.board.files && Object.keys(data.board.files).length > 0) {
             knownFilesRef.current = { ...knownFilesRef.current, ...data.board.files };
+            Object.keys(data.board.files).forEach((id) => syncedFileIdsRef.current.add(id));
             api.addFiles(Object.values(data.board.files));
           }
           api.updateScene({
@@ -285,6 +290,7 @@ export const WhiteboardRoom: React.FC = () => {
           // CRITICAL: Always add binary files before updating scene elements
           if (data.files && Object.keys(data.files).length > 0) {
             knownFilesRef.current = { ...knownFilesRef.current, ...data.files };
+            Object.keys(data.files).forEach((id) => syncedFileIdsRef.current.add(id));
             api.addFiles(Object.values(data.files));
           }
           api.updateScene({
@@ -400,6 +406,7 @@ export const WhiteboardRoom: React.FC = () => {
         // CRITICAL: Always add binary files before updating scene elements
         if (boardData.files && Object.keys(boardData.files).length > 0) {
           knownFilesRef.current = { ...knownFilesRef.current, ...boardData.files };
+          Object.keys(boardData.files).forEach((id) => syncedFileIdsRef.current.add(id));
           excalidrawAPI.addFiles(Object.values(boardData.files));
         }
         excalidrawAPI.updateScene({
@@ -467,10 +474,8 @@ export const WhiteboardRoom: React.FC = () => {
 
             // 1. Add binary file to Excalidraw instance and tracking ref
             api.addFiles([binaryFile]);
-            knownFilesRef.current = {
-              ...knownFilesRef.current,
-              [fileId]: binaryFile,
-            };
+            knownFilesRef.current[fileId] = binaryFile;
+            syncedFileIdsRef.current.add(fileId);
 
             // 2. Compute size and center at current viewport
             const appState = api.getAppState();
@@ -530,13 +535,14 @@ export const WhiteboardRoom: React.FC = () => {
             });
 
             lastSyncElementsRef.current = JSON.stringify(newElements);
+            // Send elements + ONLY this single new file delta (ultra fast & lightweight ~150KB)
             socket.emit('sync_elements', {
               roomId: boardId,
               elements: newElements,
               appState: {
                 viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
               },
-              files: knownFilesRef.current,
+              files: { [fileId]: binaryFile },
             });
           };
           reader.readAsDataURL(file);
@@ -551,7 +557,7 @@ export const WhiteboardRoom: React.FC = () => {
     };
   }, [boardId, socket]);
 
-  // Excalidraw Change Handler (strictly guarded against infinite loops)
+  // Excalidraw Change Handler (strictly guarded against infinite loops & network lag)
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleExcalidrawChange = useCallback(
@@ -574,25 +580,15 @@ export const WhiteboardRoom: React.FC = () => {
       if (isUpdatingFromSocketRef.current) return;
       if (userRoleRef.current === 'commenter') return; // Commenters cannot edit elements
 
-      // Merge all binary files into knownFilesRef so no files are dropped during debounce
+      // Only queue files if a brand new fileId was added (Delta sync)
       if (files && Object.keys(files).length > 0) {
         for (const [fId, f] of Object.entries(files)) {
-          if (f && (f as any).dataURL && (f as any).dataURL.length > 350 * 1024) {
-            optimizeImageForWhiteboard((f as any).dataURL).then(({ dataURL: optUrl, mimeType: optMime }) => {
-              knownFilesRef.current[fId] = {
-                ...(f as any),
-                dataURL: optUrl,
-                mimeType: optMime,
-              };
-            });
-          } else {
+          if (!syncedFileIdsRef.current.has(fId)) {
+            syncedFileIdsRef.current.add(fId);
             knownFilesRef.current[fId] = f;
+            pendingDeltaFilesRef.current[fId] = f;
           }
         }
-      }
-      const currentApiFiles = excalidrawAPIRef.current?.getFiles();
-      if (currentApiFiles && Object.keys(currentApiFiles).length > 0) {
-        knownFilesRef.current = { ...knownFilesRef.current, ...currentApiFiles };
       }
 
       const serialized = JSON.stringify(elements);
@@ -604,13 +600,19 @@ export const WhiteboardRoom: React.FC = () => {
 
       syncTimeoutRef.current = setTimeout(() => {
         lastSyncElementsRef.current = serialized;
+        const deltaFiles = Object.keys(pendingDeltaFilesRef.current).length > 0
+          ? { ...pendingDeltaFilesRef.current }
+          : undefined;
+        pendingDeltaFilesRef.current = {};
+
+        // Regular drawing sends ONLY lightweight elements (1KB), eliminating all lag!
         socket.emit('sync_elements', {
           roomId: boardId,
           elements: Array.from(elements),
           appState: {
             viewBackgroundColor: appState.viewBackgroundColor,
           },
-          files: knownFilesRef.current,
+          ...(deltaFiles ? { files: deltaFiles } : {}),
         });
       }, 100); // 100ms debounce for high snappiness
     },
