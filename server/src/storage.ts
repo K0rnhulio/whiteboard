@@ -20,7 +20,13 @@ if (!fs.existsSync(BOARDS_DIR)) {
 // In-memory cache for fast sync and low-latency socket emits
 const boardsCache = new Map<string, Board>();
 
-// Initial load from disk
+function readBoardFile(filePath: string): Board | null {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const board: Board = JSON.parse(content);
+  return board && board.id ? board : null;
+}
+
+// Initial load from disk (must run once when the server starts)
 export function loadAllFromDisk() {
   try {
     if (!fs.existsSync(BOARDS_DIR)) return;
@@ -30,9 +36,8 @@ export function loadAllFromDisk() {
       if (file.endsWith('.json')) {
         try {
           const filePath = path.join(BOARDS_DIR, file);
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const board: Board = JSON.parse(content);
-          if (board && board.id) {
+          const board = readBoardFile(filePath);
+          if (board) {
             boardsCache.set(board.id.toLowerCase(), board);
             count++;
           }
@@ -41,7 +46,7 @@ export function loadAllFromDisk() {
         }
       }
     }
-    console.log(`Loaded ${count} boards from disk.`);
+    console.log(`Loaded ${count} boards from disk (${BOARDS_DIR}).`);
   } catch (err) {
     console.error('Error loading boards from disk:', err);
   }
@@ -70,12 +75,25 @@ function saveToDisk(boardId: string) {
   if (!board) return;
 
   const filePath = path.join(BOARDS_DIR, `${normalizedId}.json`);
+  const tmpPath = `${filePath}.tmp`;
   try {
-    fs.writeFileSync(filePath, JSON.stringify(board, null, 2), 'utf-8');
+    // Write to a temp file first, then rename. A rename is atomic, so a power cut
+    // mid-save can never leave a half-written (unreadable) board file behind.
+    fs.writeFileSync(tmpPath, JSON.stringify(board, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, filePath);
     console.log(`[Storage] Saved board "${normalizedId}" (${board.elements?.length || 0} elements, ${board.comments?.length || 0} comments) to disk.`);
   } catch (err) {
     console.error(`Failed to save board ${normalizedId} to disk:`, err);
   }
+}
+
+// Write any saves still waiting in the debounce timer (used on shutdown)
+export function flushPendingSaves() {
+  for (const [boardId, timeout] of saveTimeouts) {
+    clearTimeout(timeout);
+    saveToDisk(boardId);
+  }
+  saveTimeouts.clear();
 }
 
 export function getAllBoardSummaries() {
@@ -105,6 +123,23 @@ export function getOrCreateBoard(id: string, name?: string, passcode?: string | 
   const existing = boardsCache.get(normalizedId);
   if (existing) {
     return existing;
+  }
+
+  // Safety net: never overwrite a board that exists on disk but isn't in memory
+  const filePath = path.join(BOARDS_DIR, `${normalizedId}.json`);
+  if (fs.existsSync(filePath)) {
+    try {
+      const fromDisk = readBoardFile(filePath);
+      if (fromDisk) {
+        boardsCache.set(normalizedId, fromDisk);
+        return fromDisk;
+      }
+    } catch (err) {
+      // Keep the unreadable file aside instead of overwriting it
+      const backupPath = `${filePath}.corrupt-${Date.now()}`;
+      console.error(`Board file ${filePath} could not be read; moved it to ${backupPath}:`, err);
+      try { fs.renameSync(filePath, backupPath); } catch { /* ignore */ }
+    }
   }
 
   const now = new Date().toISOString();
