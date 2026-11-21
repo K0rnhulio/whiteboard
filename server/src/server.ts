@@ -18,6 +18,8 @@ import {
   addCommentReply,
   toggleResolveComment,
   deleteCommentPin,
+  loadAllFromDisk,
+  flushPendingSaves,
 } from './storage.js';
 import { CollaboratorUser, CommentPin, CommentReply } from './types.js';
 
@@ -568,6 +570,18 @@ if (fs.existsSync(CLIENT_DIST)) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.sendFile(INDEX_HTML_PATH);
     }
+  });
+}
+
+// Load saved boards before accepting connections, otherwise every restart starts empty
+loadAllFromDisk();
+
+// Save anything still pending when Coolify/Docker stops the container
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`Received ${signal}, saving pending boards...`);
+    flushPendingSaves();
+    process.exit(0);
   });
 }
 
